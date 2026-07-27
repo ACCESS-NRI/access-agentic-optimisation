@@ -6,7 +6,7 @@ This is a **single-prompt, multi-gate workflow**. Do not wait for me to provide 
 
 The goal is not blind tuning. The goal is to use ESMF profile summaries, Payu/PBS logs, component logs, and, where useful, `access-profiling` / `esmf-trace` to identify the first safe optimisation family for this config.
 
-**Core objective**: the goal is to reduce the overall runtime of the model while keeping model cost reasonably low. The primary optimisation pathway is a nested node/partition search:
+**Core objective**: the goal is to reduce the overall runtime of the model while changing the model cost too much. The primary optimisation pathway is a nested node/partition search:
 
 1. For each candidate node count, keep the total core count fixed as `ncpus = nodes * CORES_PER_NODE`.
 2. At that fixed total core count, change the partition between ocean and non-ocean model components.
@@ -120,13 +120,13 @@ MOM_MASKTABLE_POLICY = "If OCN/MOM PE count or LAYOUT changes for 25km or 8km co
 15. If a new MOM mask table is required, update `MOM_input` and `config.yaml` consistently and keep the generated mask table in the experiment/configuration directory where possible.
 16. This workflow has been tested on Claude, learn from past mistakes/corrections by reading all these files and following the advice within: `.claude/memory/MEMORY.md`. Also add to these memory files when new mistakes and corrections are needed.
 17. For read-only Gadi queries, batch commands to reduce approval prompts. The Stage 5 job-submission approval gate is non-negotiable.
-18. When testing a new node count, first preserve the baseline ocean/non-ocean ratio unless the ESMF profile evidence clearly supports a different starting partition.
+18. When testing a new node count,  approximately preserve the baseline ocean/non-ocean ratio unless the ESMF profile evidence clearly supports a different starting partition.
 19. As we progress through the 11 stages, announce to the user which stage we are in.
 20. Do not change run sequence (`nuopc.runseq`).
 21. For each candidate node count, `ncpus` in `config.yaml` must equal `nodes * CORES_PER_NODE`, and `ncpus` must also equal `non_ocn_ntasks + ocn_ntasks` in `nuopc.runconfig`.
 22. Start the node-count search with the median of `MIN_NODES` and `MAX_NODES`.
 23. At each fixed node count, optimise the concurrent component partition by changing `non_ocn_ntasks` and `ocn_ntasks`, while keeping `ncpus` fixed. Estimate the approximate work per component from seconds/model-step, keep the estimate in a small table/array, and use it to choose the next partition.
-24. After finding the best approved partition for one node count, move to lower or higher node counts between `MIN_NODES` and `MAX_NODES` only if the timing/cost evidence justifies it. Do not blindly run all combinations.
+24. After finding the best approved partition for one node count, move to lower or higher node counts between `MIN_NODES` and `MAX_NODES` only if the timing/cost evidence justifies it. Do not automatically run all combinations.
 25. For components that use a layout, especially MOM6/OCN, the valid number of assignable cores must be determined from the landmasking/mask-table process. For MOM6 mask-table configs, verify that `ocn_ntasks = layout_x * layout_y - n_mask`; do not assume the first number in the mask-table filename is `ocn_ntasks`.
 26. The workflow should set up the baseline/control experiment by default. Do not assume a manually created baseline already exists unless `BASELINE_SETUP_MODE = existing-baseline` and `EXISTING_BASELINE_PATH` is provided.
 27. If `USE_EXPERIMENT_GENERATOR = yes`, use `access-experiment-generator` for both the baseline/control experiment and approved node/partition test experiments. Do not search for arbitrary local installations; use `EXPERIMENT_GENERATOR_MODULE_COMMAND`.
@@ -1002,7 +1002,7 @@ Collect, if available:
 - restart/history I/O timing;
 - esmf-trace output, if any.
 
-Use `access-profiling` and `esmf-trace` if they are available and useful. If they are not immediately usable, write a small reproducible parser instead of spending too long fighting the environment.
+Use `access-profiling` and `esmf-trace` if they are available and usable. If they are not immediately usable, write a small reproducible parser instead.
 
 Update:
 
