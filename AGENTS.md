@@ -12,7 +12,7 @@ The goal is not blind tuning. The goal is to use ESMF profile summaries, Payu/PB
 2. At that fixed total core count, change the partition between ocean and non-ocean model components.
 3. Repeat the partition search across selected node counts between `MIN_NODES` and `MAX_NODES`, starting with the median node count.
 
-In `nuopc.runconfig`, the non-ocean model components are `atm_ntasks`, `cpl_ntasks`, `ice_ntasks`, `ocn_rootpe`, and `rof_ntasks`; these should all be set to the same `non_ocn_ntasks` value. The ocean component is `ocn_ntasks`, with `ocn_rootpe = non_ocn_ntasks` and `ocn_ntasks = ncpus - non_ocn_ntasks`.
+In `nuopc.runconfig`, the non-ocean model components are `atm_ntasks`, `cpl_ntasks`, `ice_ntasks`, `ocn_rootpe`, and `rof_ntasks`; these should all be set to the same `non_ocn_ntasks` value. The ocean component is `ocn_ntasks`, with `ocn_rootpe = non_ocn_ntasks`. In the first-pass/default search, set `ocn_ntasks = ncpus - non_ocn_ntasks`; later under-subscribed candidates may use fewer active ranks only if profile evidence justifies it and the user approves.
 
 Very important: this workflow must produce and keep updating both:
 
@@ -45,6 +45,8 @@ BASE_CONFIG_PATH = "<replace with Gadi path to the source/reference config check
 
 PROJECT_PATH = "<replace with top-level project directory; the baseline run, all test runs, and profiling_analysis/ all reside directly inside here>"
 
+QUEUE = "<replace with PBS queue, e.g. normalsr>"
+
 # Baseline/control setup. By default, the workflow creates the baseline/control experiment instead of assuming it already exists.
 BASELINE_SETUP_MODE = "create-baseline"  # options: create-baseline, existing-baseline
 
@@ -69,7 +71,9 @@ OPTIMISATION_OBJECTIVE = "preliminary optimisation using ESMF profile summary ev
 
 MAX_NEW_TEST_RUNS_FOR_PRELIMINARY_PASS = 3
 
-CORES_PER_NODE = 104
+CORES_PER_NODE = 104  # default for Gadi Sapphire Rapids / normalsr; verify from the queue/node type before using
+
+CORES_PER_NODE_VERIFICATION = "Before using CORES_PER_NODE, verify the queue/node type from config.yaml. Do not assume 104 cores/node applies across all queues or systems."
 
 MIN_NODES = "<minimum number of Gadi nodes to test>"
 
@@ -77,7 +81,7 @@ MAX_NODES = "<maximum number of Gadi nodes to test>"
 
 NODE_SEARCH_STRATEGY = "start at the median of MIN_NODES and MAX_NODES, then test lower/higher node counts only if justified by profile evidence"
 
-PARTITION_SEARCH_STRATEGY = "for each fixed node count, keep ncpus = nodes * CORES_PER_NODE fixed and vary the ocn/non-ocn partition"
+PARTITION_SEARCH_STRATEGY = "for each fixed node count, keep ncpus = nodes * CORES_PER_NODE fixed and vary the ocn/non-ocn partition; fully allocate ranks in the first pass, and consider under-subscription only as a documented second-pass option if profiling evidence supports it"
 
 MAX_PARTITIONS_PER_NODE = 3
 
@@ -123,7 +127,7 @@ MOM_MASKTABLE_POLICY = "If OCN/MOM PE count or LAYOUT changes for 25km or 8km co
 18. When testing a new node count,  approximately preserve the baseline ocean/non-ocean ratio unless the ESMF profile evidence clearly supports a different starting partition.
 19. As we progress through the 11 stages, announce to the user which stage we are in.
 20. Do not change run sequence (`nuopc.runseq`).
-21. For each candidate node count, `ncpus` in `config.yaml` must equal `nodes * CORES_PER_NODE`, and `ncpus` must also equal `non_ocn_ntasks + ocn_ntasks` in `nuopc.runconfig`.
+21. For each candidate node count, first verify the PBS queue/node type and `CORES_PER_NODE` value from `config.yaml`, PBS settings, or `pbsnodes` where available. `CORES_PER_NODE = 104` is the Sapphire Rapids / `normalsr` default, not a universal assumption. After verification, `ncpus` in `config.yaml` must equal `nodes * CORES_PER_NODE`. In the first-pass partition search, fully allocate the requested ranks so that `non_ocn_ntasks + ocn_ntasks = ncpus`. If ESMF/profile evidence suggests that assigning all remaining ranks to a component increases MPI or halo-exchange overhead, a later under-subscribed candidate may be proposed where `ncpus >= non_ocn_ntasks + ocn_ntasks`. Any under-subscribed candidate must explicitly report `unused_pes = ncpus - (non_ocn_ntasks + ocn_ntasks)`, explain why leaving ranks unused may improve performance, and stop for approval before setup or submission.
 22. Start the node-count search with the median of `MIN_NODES` and `MAX_NODES`.
 23. At each fixed node count, optimise the concurrent component partition by changing `non_ocn_ntasks` and `ocn_ntasks`, while keeping `ncpus` fixed. Estimate the approximate work per component from seconds/model-step, keep the estimate in a small table/array, and use it to choose the next partition.
 24. After finding the best approved partition for one node count, move to lower or higher node counts between `MIN_NODES` and `MAX_NODES` only if the timing/cost evidence justifies it. Do not automatically run all combinations.
@@ -261,7 +265,7 @@ Candidate total core counts are determined by:
 ncpus = nodes * CORES_PER_NODE
 ```
 
-Start with the median of `MIN_NODES` and `MAX_NODES`. After evaluating the median node count, test lower or higher node counts only if the performance/cost evidence justifies it. Do not blindly run every node count unless explicitly approved.
+Start with the median of `MIN_NODES` and `MAX_NODES`. After evaluating the median node count, test lower or higher node counts only if the performance/cost evidence justifies it. Do not automatically run every node count unless explicitly approved.
 
 ### Inner loop: ocean/non-ocean partition search
 
@@ -271,14 +275,23 @@ Use this relationship:
 
 ```text
 non_ocn_ntasks = atm_ntasks = cpl_ntasks = ice_ntasks = rof_ntasks = ocn_rootpe
+
+First-pass/default:
 ocn_ntasks = ncpus - non_ocn_ntasks
 non_ocn_ntasks + ocn_ntasks = ncpus
+unused_pes = 0
+
+Optional second-pass only, if justified by timing evidence:
+non_ocn_ntasks + ocn_ntasks <= ncpus
+unused_pes = ncpus - (non_ocn_ntasks + ocn_ntasks)
 ```
+
+The workflow should fully allocate all requested ranks in the first-pass search. Under-subscription is a second-pass optimisation only. It should be considered only when profiling suggests that giving additional ranks to a component worsens performance through MPI, halo-exchange, or other communication overhead. Ignore `ncpureq` / deliberate oversubscription for this preliminary workflow unless the user explicitly asks for it.
 
 For each proposed partition, use ESMF profile timings to estimate whether the ocean or non-ocean shared component block is on the critical path. Keep a small machine-readable table of the estimate, including:
 
 ```text
-nodes,ncpus,non_ocn_ntasks,ocn_ntasks,estimated_non_ocn_s_per_step,estimated_ocn_s_per_step,expected_bottleneck,reason
+nodes,ncpus,non_ocn_ntasks,ocn_ntasks,unused_pes,allocation_mode,estimated_non_ocn_s_per_step,estimated_ocn_s_per_step,expected_bottleneck,reason
 ```
 
 The search order is:
@@ -516,6 +529,8 @@ Use this structure:
 | Dirty state | |
 | Executable | |
 | Queue | |
+| Cores per node | |
+| Cores-per-node verification source | |
 | ncpus | |
 | mem | |
 | walltime | |
@@ -930,7 +945,7 @@ Record in the progress Markdown:
 - branch and commit
 - dirty state
 - executable
-- queue, ncpus, walltime, mem, jobfs
+- queue, verified cores per node, ncpus, walltime, mem, jobfs
 - active components
 - PE layout
 - run sequence
@@ -1186,6 +1201,7 @@ For the completed run, report:
 - projected SU/year or CPU-hours/model-year
 - memory used
 - active PE layout
+- unused PEs, if any
 - experiment setup backend and generator YAML/fallback command, if applicable
 - whether this was the baseline/control run or an optimisation test
 - MOM `MASKTABLE` and `LAYOUT`, if applicable
